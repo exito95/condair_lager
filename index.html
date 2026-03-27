@@ -12,30 +12,43 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
         // --- KONFIGURATION ---
-        // Die Firebase Config wird von der Umgebung bereitgestellt
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'lager-v2-secure';
         const MASTER_PASSWORD = "HansZaun"; 
-        
         let db, auth;
         window.inventory = [];
         let currentUser = null;
 
-        async function initApp() {
+        // Sicherer Abruf der Konfiguration
+        const getFirebaseConfig = () => {
             try {
-                const app = initializeApp(firebaseConfig);
+                return typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+            } catch (e) {
+                return null;
+            }
+        };
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'lager-v2-secure';
+
+        async function initApp() {
+            const isAuthenticated = sessionStorage.getItem('lager_auth_status') === 'success';
+            
+            if (!isAuthenticated) {
+                showLogin(true);
+                return;
+            }
+
+            const config = getFirebaseConfig();
+            if (!config) {
+                console.error("Cloud-Konfiguration fehlt.");
+                document.getElementById('user-display').innerText = "Offline-Modus (Keine Config)";
+                showLogin(false);
+                return;
+            }
+
+            try {
+                const app = initializeApp(config);
                 db = getFirestore(app);
                 auth = getAuth(app);
 
-                // Prüfen ob bereits erfolgreich angemeldet (Session Storage)
-                const isAuthenticated = sessionStorage.getItem('lager_auth_status') === 'success';
-                
-                if (!isAuthenticated) {
-                    showLogin(true);
-                    return;
-                }
-
-                // Authentifizierung starten
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
@@ -51,12 +64,14 @@
                     }
                 });
             } catch (error) {
-                console.error("Firebase Initialisierungsfehler:", error);
-                alert("Verbindung zur Cloud fehlgeschlagen. Bitte Internetverbindung prüfen.");
+                console.error("Firebase Fehler:", error);
+                showLogin(false);
+                document.getElementById('user-display').innerText = "Verbindungsfehler";
             }
         }
 
         function listenToChanges() {
+            if (!db) return;
             try {
                 const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'inventory');
                 onSnapshot(colRef, (snapshot) => {
@@ -70,24 +85,26 @@
             }
         }
 
-        // Login Funktion global verfügbar machen
+        // Login Funktion (Global für Button)
         window.handleLogin = (e) => {
             if(e) e.preventDefault();
-            const input = document.getElementById('login-id').value;
+            const inputField = document.getElementById('login-id');
+            const input = inputField.value;
+            const btn = document.getElementById('login-btn');
             
+            console.log("Login Versuch..."); // Debugging
+
             if (input === MASTER_PASSWORD) {
                 sessionStorage.setItem('lager_auth_status', 'success');
-                // Erneut initialisieren nach Login
                 initApp();
             } else {
-                const btn = document.getElementById('login-btn');
                 btn.classList.add('bg-red-600');
                 btn.innerText = "Falsches Passwort";
                 setTimeout(() => {
                     btn.classList.remove('bg-red-600');
                     btn.innerText = "Freischalten";
                 }, 2000);
-                document.getElementById('login-id').value = "";
+                inputField.value = "";
             }
         };
 
@@ -108,39 +125,31 @@
             }
         }
 
+        // ... Restliche Funktionen für das UI ...
         window.addPackstueckRow = () => {
             const container = document.getElementById('packstuecke-container');
             const row = document.createElement('div');
             row.className = "grid grid-cols-12 gap-2 mb-2 items-end packstueck-row bg-slate-50 p-2 rounded-lg border border-slate-100";
             row.innerHTML = `
-                <div class="col-span-5">
-                    <label class="text-[9px] font-bold uppercase text-slate-400">Typ</label>
+                <div class="col-span-5"><label class="text-[9px] font-bold uppercase text-slate-400">Typ</label>
                     <select class="w-full border-slate-200 bg-white p-2 rounded-lg text-sm pack-typ">
-                        <option>Euro-Palette</option>
-                        <option>Halbpalette</option>
-                        <option>Einwegpalette</option>
-                        <option>Karton</option>
-                        <option>Kiste</option>
+                        <option>Euro-Palette</option><option>Halbpalette</option><option>Einwegpalette</option><option>Karton</option><option>Kiste</option>
                     </select>
                 </div>
-                <div class="col-span-3">
-                    <label class="text-[9px] font-bold uppercase text-slate-400">Anz.</label>
+                <div class="col-span-3"><label class="text-[9px] font-bold uppercase text-slate-400">Anz.</label>
                     <input type="number" required class="w-full border-slate-200 bg-white p-2 rounded-lg text-sm pack-anzahl" value="1">
                 </div>
-                <div class="col-span-3">
-                    <label class="text-[9px] font-bold uppercase text-slate-400">Kg ges.</label>
+                <div class="col-span-3"><label class="text-[9px] font-bold uppercase text-slate-400">Kg ges.</label>
                     <input type="number" step="0.1" required class="w-full border-slate-200 bg-white p-2 rounded-lg text-sm pack-gewicht">
                 </div>
-                <div class="col-span-1 text-right">
-                    <button type="button" onclick="this.parentElement.parentElement.remove()" class="text-red-400 hover:text-red-600 text-lg">×</button>
-                </div>
+                <div class="col-span-1 text-right"><button type="button" onclick="this.parentElement.parentElement.remove()" class="text-red-400 hover:text-red-600 text-lg">×</button></div>
             `;
             container.appendChild(row);
         };
 
         window.saveItem = async (e) => {
             e.preventDefault();
-            if (!currentUser) return;
+            if (!db) return alert("Speichern nicht möglich: Keine Cloud-Verbindung.");
 
             const rows = document.querySelectorAll('.packstueck-row');
             const packstuecke = Array.from(rows).map(row => ({
@@ -170,41 +179,26 @@
                 toggleModal(false);
                 e.target.reset();
             } catch (err) {
-                alert("Fehler beim Speichern in der Cloud.");
+                alert("Fehler beim Speichern.");
             }
         };
 
         window.renderTable = () => {
             const tableBody = document.getElementById('tableBody');
             const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            const filtered = window.inventory.filter(i => (i.firma || "").toLowerCase().includes(searchTerm) || (i.laderef || "").toLowerCase().includes(searchTerm));
             
-            const filtered = window.inventory.filter(i => 
-                (i.firma || "").toLowerCase().includes(searchTerm) || 
-                (i.laderef || "").toLowerCase().includes(searchTerm)
-            );
+            document.getElementById('stat-count').innerText = window.inventory.filter(i => i.status === 'eingelagert').reduce((a, b) => a + (b.anzahlGesamt || 0), 0);
+            document.getElementById('stat-weight').innerText = window.inventory.filter(i => i.status === 'eingelagert').reduce((a, b) => a + (b.gewichtGesamt || 0), 0).toLocaleString('de-DE');
 
-            const active = window.inventory.filter(i => i.status === 'eingelagert');
-            document.getElementById('stat-count').innerText = active.reduce((a, b) => a + (b.anzahlGesamt || 0), 0);
-            document.getElementById('stat-weight').innerText = active.reduce((a, b) => a + (b.gewichtGesamt || 0), 0).toLocaleString('de-DE');
-
-            tableBody.innerHTML = '';
+            tableBody.innerHTML = filtered.length ? '' : '<tr><td colspan="9" class="p-10 text-center text-slate-400">Keine Einträge...</td></tr>';
             
-            if (filtered.length === 0) {
-                tableBody.innerHTML = '<tr><td colspan="9" class="p-10 text-center text-slate-400">Keine Daten gefunden...</td></tr>';
-                return;
-            }
-
             filtered.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).forEach(item => {
                 const summary = (item.packstuecke || []).reduce((acc, curr) => {
-                    if (!acc[curr.typ]) acc[curr.typ] = 0;
-                    acc[curr.typ] += curr.anzahl;
+                    acc[curr.typ] = (acc[curr.typ] || 0) + curr.anzahl;
                     return acc;
                 }, {});
-                
-                const packInfo = Object.entries(summary)
-                    .map(([typ, anz]) => `${anz}x ${typ}`)
-                    .join('<br>');
-
+                const packInfo = Object.entries(summary).map(([typ, anz]) => `${anz}x ${typ}`).join('<br>');
                 const row = document.createElement('tr');
                 row.className = "border-b border-slate-100 hover:bg-blue-50/30 transition text-sm align-top";
                 row.innerHTML = `
@@ -215,36 +209,28 @@
                     <td class="p-4 font-semibold">${item.anzahlGesamt}</td>
                     <td class="p-4">${item.gewichtGesamt} kg</td>
                     <td class="p-4 text-slate-400">${item.datumEin}</td>
-                    <td class="p-4">
-                        <span class="px-2 py-1 rounded-full text-[10px] font-black uppercase ${item.status === 'eingelagert' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}">
-                            ${item.status === 'eingelagert' ? 'Im Lager' : 'Raus: ' + (item.datumAus || '')}
-                        </span>
-                    </td>
+                    <td class="p-4"><span class="px-2 py-1 rounded-full text-[10px] font-black uppercase ${item.status === 'eingelagert' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}">${item.status === 'eingelagert' ? 'Im Lager' : 'Raus'}</span></td>
                     <td class="p-4 text-right flex justify-end gap-4 text-xl">
-                        ${item.status === 'eingelagert' ? `<button onclick="markAsOut('${item.id}')" title="Ausbuchen">📤</button>` : ''}
-                        <button onclick="deleteItem('${item.id}')" title="Löschen" class="opacity-20 hover:opacity-100 hover:text-red-500 transition">🗑️</button>
-                    </td>
-                `;
+                        ${item.status === 'eingelagert' ? `<button onclick="markAsOut('${item.id}')">📤</button>` : ''}
+                        <button onclick="deleteItem('${item.id}')" class="opacity-20 hover:opacity-100 hover:text-red-500">🗑️</button>
+                    </td>`;
                 tableBody.appendChild(row);
             });
         };
 
         window.markAsOut = async (id) => {
             const date = prompt("Auslagerungsdatum (JJJJ-MM-TT):", new Date().toISOString().split('T')[0]);
-            if (!date) return;
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'inventory', id);
-            await updateDoc(docRef, { status: 'ausgelagert', datumAus: date });
+            if (!date || !db) return;
+            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventory', id), { status: 'ausgelagert', datumAus: date });
         };
 
         window.deleteItem = async (id) => {
-            if(!confirm('Eintrag permanent löschen?')) return;
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'inventory', id);
-            await deleteDoc(docRef);
+            if(!confirm('Löschen?') || !db) return;
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventory', id));
         };
 
         window.toggleModal = (show) => {
-            const modal = document.getElementById('modal');
-            modal.classList.toggle('hidden', !show);
+            document.getElementById('modal').classList.toggle('hidden', !show);
             if(show) {
                 document.getElementById('datumEin').valueAsDate = new Date();
                 document.getElementById('packstuecke-container').innerHTML = '';
@@ -252,120 +238,79 @@
             }
         };
 
-        // Start der App
-        window.addEventListener('load', initApp);
+        window.addEventListener('DOMContentLoaded', initApp);
     </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
-        .glass { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px); }
     </style>
 </head>
 <body class="min-h-screen">
-
-    <!-- Login Overlay -->
     <div id="login-overlay" class="fixed inset-0 bg-slate-100 z-[100] flex items-center justify-center p-4">
         <form onsubmit="handleLogin(event)" class="bg-white p-10 rounded-[2.5rem] shadow-2xl max-w-sm w-full text-center border border-slate-200">
             <div class="w-20 h-20 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center text-4xl mx-auto mb-6">🔒</div>
             <h1 class="text-3xl font-black text-slate-800 mb-2 uppercase tracking-tighter">Lager<span class="text-blue-600">Cloud</span></h1>
-            <p class="text-slate-400 text-sm mb-8 font-semibold leading-relaxed">Bitte gib das Master-Passwort ein, um fortzufahren.</p>
-            <input type="password" id="login-id" placeholder="Passwort eingeben..." required class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl mb-4 text-center text-lg outline-none focus:ring-2 focus:ring-blue-500 transition-all">
-            <button type="submit" id="login-btn" class="w-full bg-blue-600 text-white p-4 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-700 transition shadow-lg shadow-blue-200 active:scale-95">Freischalten</button>
-            <p class="mt-6 text-[10px] text-slate-300 font-bold uppercase tracking-widest">Autorisierter Zugriff erforderlich</p>
+            <p class="text-slate-400 text-sm mb-8 font-semibold">Passwort: HansZaun</p>
+            <input type="password" id="login-id" placeholder="Passwort..." required class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl mb-4 text-center text-lg outline-none focus:ring-2 focus:ring-blue-500">
+            <button type="submit" id="login-btn" class="w-full bg-blue-600 text-white p-4 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-700 transition shadow-lg active:scale-95">Freischalten</button>
         </form>
     </div>
 
-    <!-- Main Content -->
     <div id="main-content" class="hidden">
-        <nav class="glass sticky top-0 z-40 border-b border-slate-200 p-4 mb-6">
+        <nav class="sticky top-0 z-40 bg-white/90 backdrop-blur border-b p-4 mb-6">
             <div class="max-w-7xl mx-auto flex justify-between items-center">
-                <div>
-                    <h1 class="text-xl font-black text-slate-800 tracking-tighter uppercase">Lager<span class="text-blue-600">Cloud</span></h1>
-                    <div class="flex items-center gap-2">
-                        <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                        <p id="user-display" class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Autorisiert</p>
-                    </div>
-                </div>
-                <div class="flex gap-4 items-center">
-                    <button onclick="logout()" class="text-[10px] font-bold text-slate-400 uppercase tracking-widest hover:text-red-600 transition">Sicher Abmelden</button>
-                    <button onclick="toggleModal(true)" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-xl font-bold shadow-lg shadow-blue-200 transition">+ Neu</button>
+                <h1 class="text-xl font-black text-slate-800 uppercase">Lager<span class="text-blue-600">Cloud</span></h1>
+                <p id="user-display" class="text-[10px] font-bold text-slate-400 uppercase tracking-widest"></p>
+                <div class="flex gap-4">
+                    <button onclick="logout()" class="text-[10px] font-bold text-slate-400 hover:text-red-600">Abmelden</button>
+                    <button onclick="toggleModal(true)" class="bg-blue-600 text-white px-6 py-2 rounded-xl font-bold">+ Neu</button>
                 </div>
             </div>
         </nav>
-
         <main class="max-w-7xl mx-auto px-4">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                    <p class="text-slate-400 text-xs font-bold uppercase mb-1">Packstücke Aktuell</p>
+                <div class="bg-white p-6 rounded-2xl border">
+                    <p class="text-slate-400 text-xs font-bold uppercase">Packstücke</p>
                     <h2 id="stat-count" class="text-3xl font-black text-slate-800">0</h2>
                 </div>
-                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                    <p class="text-slate-400 text-xs font-bold uppercase mb-1">Gewicht (kg)</p>
+                <div class="bg-white p-6 rounded-2xl border">
+                    <p class="text-slate-400 text-xs font-bold uppercase">Gewicht (kg)</p>
                     <h2 id="stat-weight" class="text-3xl font-black text-slate-800">0</h2>
                 </div>
-                <div class="bg-slate-800 p-6 rounded-2xl shadow-lg text-white">
-                    <p class="opacity-70 text-xs font-bold uppercase mb-1">Suche</p>
-                    <input type="text" id="searchInput" oninput="renderTable()" placeholder="Firma / Referenz..." class="w-full mt-1 bg-slate-700 border-none placeholder-slate-400 text-white rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                <div class="bg-slate-800 p-6 rounded-2xl text-white">
+                    <input type="text" id="searchInput" oninput="renderTable()" placeholder="Suchen..." class="w-full bg-slate-700 border-none rounded-lg p-2 text-white">
                 </div>
             </div>
-
-            <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left border-collapse">
-                        <thead>
-                            <tr class="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b">
-                                <th class="p-4">Ref</th>
-                                <th class="p-4">Firma</th>
-                                <th class="p-4">Ort</th>
-                                <th class="p-4">Typen (Zusammengef.)</th>
-                                <th class="p-4">Stk.</th>
-                                <th class="p-4">Gewicht</th>
-                                <th class="p-4">Eingang</th>
-                                <th class="p-4">Status</th>
-                                <th class="p-4"></th>
-                            </tr>
-                        </thead>
-                        <tbody id="tableBody" class="text-slate-700">
-                            <tr><td colspan="9" class="p-10 text-center text-slate-400">Lade Daten aus Cloud...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
+            <div class="bg-white rounded-2xl border overflow-hidden">
+                <table class="w-full text-left">
+                    <thead class="bg-slate-50 text-[10px] font-black uppercase text-slate-400 border-b">
+                        <tr><th class="p-4">Ref</th><th class="p-4">Firma</th><th class="p-4">Ort</th><th class="p-4">Typen</th><th class="p-4">Stk.</th><th class="p-4">Kg</th><th class="p-4">Ein</th><th class="p-4">Status</th><th class="p-4"></th></tr>
+                    </thead>
+                    <tbody id="tableBody"></tbody>
+                </table>
             </div>
         </main>
     </div>
 
-    <!-- Modal -->
-    <div id="modal" class="fixed inset-0 bg-slate-900/60 hidden flex items-center justify-center p-4 z-50 backdrop-blur-sm overflow-y-auto">
-        <div class="bg-white rounded-3xl shadow-2xl max-w-2xl w-full p-8 my-8">
-            <div class="flex justify-between items-center mb-6">
-                <h2 class="text-2xl font-black text-slate-800">Wareneingang buchen</h2>
-                <button onclick="toggleModal(false)" class="text-slate-400 hover:text-slate-600 text-2xl">×</button>
-            </div>
-            
-            <form onsubmit="saveItem(event)" class="space-y-6">
+    <div id="modal" class="fixed inset-0 bg-slate-900/60 hidden flex items-center justify-center p-4 z-50 overflow-y-auto">
+        <div class="bg-white rounded-3xl max-w-2xl w-full p-8 my-8 shadow-2xl">
+            <h2 class="text-2xl font-black mb-6">Wareneingang</h2>
+            <form onsubmit="saveItem(event)" class="space-y-4">
                 <div class="grid grid-cols-2 gap-4">
-                    <div class="col-span-2">
-                        <label class="text-[10px] font-bold uppercase text-slate-400">Firma / Empfänger</label>
-                        <input type="text" id="firma" required class="w-full border-slate-200 bg-slate-50 p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
-                    </div>
-                    <div><label class="text-[10px] font-bold uppercase text-slate-400">Lade-Referenz</label><input type="text" id="laderef" required class="w-full border-slate-200 bg-blue-50 p-3 rounded-xl font-bold text-blue-600 uppercase outline-none"></div>
-                    <div><label class="text-[10px] font-bold uppercase text-slate-400">Datum Eingang</label><input type="date" id="datumEin" required class="w-full border-slate-200 bg-slate-50 p-3 rounded-xl"></div>
-                    <div><label class="text-[10px] font-bold uppercase text-slate-400">Land</label><input type="text" id="land" required class="w-full border-slate-200 bg-slate-50 p-3 rounded-xl"></div>
-                    <div><label class="text-[10px] font-bold uppercase text-slate-400">Stadt</label><input type="text" id="stadt" required class="w-full border-slate-200 bg-slate-50 p-3 rounded-xl"></div>
-                    <div><label class="text-[10px] font-bold uppercase text-slate-400">PLZ</label><input type="text" id="plz" required class="w-full border-slate-200 bg-slate-50 p-3 rounded-xl"></div>
+                    <div class="col-span-2"><input type="text" id="firma" placeholder="Firma" required class="w-full border p-3 rounded-xl bg-slate-50"></div>
+                    <input type="text" id="laderef" placeholder="Referenz" required class="w-full border p-3 rounded-xl bg-blue-50 text-blue-600 font-bold">
+                    <input type="date" id="datumEin" required class="w-full border p-3 rounded-xl bg-slate-50">
+                    <input type="text" id="land" placeholder="Land" required class="w-full border p-3 rounded-xl bg-slate-50">
+                    <input type="text" id="stadt" placeholder="Stadt" required class="w-full border p-3 rounded-xl bg-slate-50">
+                    <input type="text" id="plz" placeholder="PLZ" required class="w-full border p-3 rounded-xl bg-slate-50">
                 </div>
-
-                <div class="border-t pt-6">
-                    <div class="flex justify-between items-center mb-4">
-                        <h3 class="font-bold text-slate-800 text-sm uppercase tracking-wider">Packstücke</h3>
-                        <button type="button" onclick="addPackstueckRow()" class="text-blue-600 text-xs font-bold hover:underline">+ Weiteren Typ hinzufügen</button>
-                    </div>
+                <div class="border-t pt-4">
+                    <div class="flex justify-between items-center mb-4"><h3 class="font-bold text-sm uppercase">Packstücke</h3><button type="button" onclick="addPackstueckRow()" class="text-blue-600 text-xs font-bold">+ Mehr</button></div>
                     <div id="packstuecke-container"></div>
                 </div>
-
-                <div class="flex justify-end gap-4 pt-6 border-t">
-                    <button type="button" onclick="toggleModal(false)" class="font-bold text-slate-400 hover:text-slate-600">Abbrechen</button>
-                    <button type="submit" class="bg-blue-600 text-white px-10 py-3 rounded-2xl font-black shadow-lg shadow-blue-100 hover:bg-blue-700 transition uppercase text-sm tracking-widest">In Cloud Speichern</button>
+                <div class="flex justify-end gap-4 pt-4 border-t">
+                    <button type="button" onclick="toggleModal(false)">Abbrechen</button>
+                    <button type="submit" class="bg-blue-600 text-white px-8 py-3 rounded-2xl font-black uppercase text-xs">Speichern</button>
                 </div>
             </form>
         </div>
