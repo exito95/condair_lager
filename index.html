@@ -12,9 +12,10 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
         // --- KONFIGURATION ---
+        // Die Firebase Config wird von der Umgebung bereitgestellt
         const firebaseConfig = JSON.parse(__firebase_config);
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'lager-v2-secure';
-        const MASTER_PASSWORD = "HansZaun"; // Das festgelegte Passwort
+        const MASTER_PASSWORD = "HansZaun"; 
         
         let db, auth;
         window.inventory = [];
@@ -26,7 +27,7 @@
                 db = getFirestore(app);
                 auth = getAuth(app);
 
-                // Prüfen ob bereits erfolgreich angemeldet (Session Storage hält Login bis Browser zu geht)
+                // Prüfen ob bereits erfolgreich angemeldet (Session Storage)
                 const isAuthenticated = sessionStorage.getItem('lager_auth_status') === 'success';
                 
                 if (!isAuthenticated) {
@@ -34,6 +35,7 @@
                     return;
                 }
 
+                // Authentifizierung starten
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
@@ -43,33 +45,48 @@
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
                         currentUser = user;
-                        document.getElementById('user-display').innerText = `System Status: Online & Autorisatisiert`;
+                        document.getElementById('user-display').innerText = `System Status: Online & Autorisiert`;
                         showLogin(false);
                         listenToChanges();
                     }
                 });
             } catch (error) {
-                console.error("Firebase Auth Error", error);
+                console.error("Firebase Initialisierungsfehler:", error);
+                alert("Verbindung zur Cloud fehlgeschlagen. Bitte Internetverbindung prüfen.");
             }
         }
 
         function listenToChanges() {
-            const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'inventory');
-            onSnapshot(colRef, (snapshot) => {
-                window.inventory = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                renderTable();
-            }, (err) => {
-                console.error("Firestore Error:", err);
-            });
+            try {
+                const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'inventory');
+                onSnapshot(colRef, (snapshot) => {
+                    window.inventory = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    renderTable();
+                }, (err) => {
+                    console.error("Firestore Snapshot Fehler:", err);
+                });
+            } catch (e) {
+                console.error("Listen Error:", e);
+            }
         }
 
-        window.login = () => {
+        // Login Funktion global verfügbar machen
+        window.handleLogin = (e) => {
+            if(e) e.preventDefault();
             const input = document.getElementById('login-id').value;
+            
             if (input === MASTER_PASSWORD) {
                 sessionStorage.setItem('lager_auth_status', 'success');
+                // Erneut initialisieren nach Login
                 initApp();
             } else {
-                alert("Falsches Passwort! Zugriff verweigert.");
+                const btn = document.getElementById('login-btn');
+                btn.classList.add('bg-red-600');
+                btn.innerText = "Falsches Passwort";
+                setTimeout(() => {
+                    btn.classList.remove('bg-red-600');
+                    btn.innerText = "Freischalten";
+                }, 2000);
                 document.getElementById('login-id').value = "";
             }
         };
@@ -80,8 +97,15 @@
         };
 
         function showLogin(show) {
-            document.getElementById('login-overlay').classList.toggle('hidden', !show);
-            document.getElementById('main-content').classList.toggle('hidden', show);
+            const overlay = document.getElementById('login-overlay');
+            const content = document.getElementById('main-content');
+            if(show) {
+                overlay.classList.remove('hidden');
+                content.classList.add('hidden');
+            } else {
+                overlay.classList.add('hidden');
+                content.classList.remove('hidden');
+            }
         }
 
         window.addPackstueckRow = () => {
@@ -164,8 +188,14 @@
             document.getElementById('stat-weight').innerText = active.reduce((a, b) => a + (b.gewichtGesamt || 0), 0).toLocaleString('de-DE');
 
             tableBody.innerHTML = '';
+            
+            if (filtered.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="9" class="p-10 text-center text-slate-400">Keine Daten gefunden...</td></tr>';
+                return;
+            }
+
             filtered.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).forEach(item => {
-                const summary = item.packstuecke.reduce((acc, curr) => {
+                const summary = (item.packstuecke || []).reduce((acc, curr) => {
                     if (!acc[curr.typ]) acc[curr.typ] = 0;
                     acc[curr.typ] += curr.anzahl;
                     return acc;
@@ -213,7 +243,8 @@
         };
 
         window.toggleModal = (show) => {
-            document.getElementById('modal').classList.toggle('hidden', !show);
+            const modal = document.getElementById('modal');
+            modal.classList.toggle('hidden', !show);
             if(show) {
                 document.getElementById('datumEin').valueAsDate = new Date();
                 document.getElementById('packstuecke-container').innerHTML = '';
@@ -221,7 +252,8 @@
             }
         };
 
-        window.onload = initApp;
+        // Start der App
+        window.addEventListener('load', initApp);
     </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
@@ -233,14 +265,14 @@
 
     <!-- Login Overlay -->
     <div id="login-overlay" class="fixed inset-0 bg-slate-100 z-[100] flex items-center justify-center p-4">
-        <div class="bg-white p-10 rounded-[2.5rem] shadow-2xl max-w-sm w-full text-center border border-slate-200">
+        <form onsubmit="handleLogin(event)" class="bg-white p-10 rounded-[2.5rem] shadow-2xl max-w-sm w-full text-center border border-slate-200">
             <div class="w-20 h-20 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center text-4xl mx-auto mb-6">🔒</div>
             <h1 class="text-3xl font-black text-slate-800 mb-2 uppercase tracking-tighter">Lager<span class="text-blue-600">Cloud</span></h1>
             <p class="text-slate-400 text-sm mb-8 font-semibold leading-relaxed">Bitte gib das Master-Passwort ein, um fortzufahren.</p>
-            <input type="password" id="login-id" placeholder="Passwort eingeben..." class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl mb-4 text-center text-lg outline-none focus:ring-2 focus:ring-blue-500 transition-all">
-            <button onclick="login()" class="w-full bg-blue-600 text-white p-4 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-700 transition shadow-lg shadow-blue-200 active:scale-95">Freischalten</button>
+            <input type="password" id="login-id" placeholder="Passwort eingeben..." required class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl mb-4 text-center text-lg outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+            <button type="submit" id="login-btn" class="w-full bg-blue-600 text-white p-4 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-700 transition shadow-lg shadow-blue-200 active:scale-95">Freischalten</button>
             <p class="mt-6 text-[10px] text-slate-300 font-bold uppercase tracking-widest">Autorisierter Zugriff erforderlich</p>
-        </div>
+        </form>
     </div>
 
     <!-- Main Content -->
@@ -294,7 +326,7 @@
                             </tr>
                         </thead>
                         <tbody id="tableBody" class="text-slate-700">
-                            <tr><td colspan="9" class="p-10 text-center text-slate-400">Keine Daten vorhanden...</td></tr>
+                            <tr><td colspan="9" class="p-10 text-center text-slate-400">Lade Daten aus Cloud...</td></tr>
                         </tbody>
                     </table>
                 </div>
